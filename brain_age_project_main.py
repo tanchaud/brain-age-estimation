@@ -1,5 +1,9 @@
 import os
+
 import numpy as np
+import pandas as pd
+from sklearn import svm
+
 import scipy.io
 import matplotlib.pyplot as plt # For data distribution plotting
 
@@ -21,14 +25,11 @@ from tensorflow.keras.applications.vgg16 import VGG16
 
 # --- Configuration ---
 # Set up your paths and model choices here
-DATA_BASE_DIR = '/Users/tanchaud/Academia/Research_Project/BrainAge/Data' # Adjust this
-NIFTI_TOOLBOX_PATH = '~/libs/nii' # Not directly used in Python if using nibabel
-MATCONVNET_PATH = '~/libs/matconvnet-1.0-beta23' # Not directly used; Keras models are used instead
+DATA_BASE_DIR = '/Users/tanchaud/Data_IXI/June' # Adjust this
 
 # Example: IXI dataset paths
-IXI_DATA_DIR = os.path.join(DATA_BASE_DIR, 'brainage_new', 'IXI')
-IXI_AGES_FILE = os.path.join(IXI_DATA_DIR, 'tables', 'AGE_IXI547.mat') # Assuming .mat, adjust if different
-IXI_RIDS_FILE = os.path.join(IXI_DATA_DIR, 'tables', 'RID_IXI547.mat') # Assuming .mat
+IXI_IMAGE_DIR = os.path.join(DATA_BASE_DIR,'IXI-T1')
+IXI_DEMOGRAPHICS_FILE = os.path.join(DATA_BASE_DIR,'IXI.xls')
 
 # Feature extraction CNN model (using Keras VGG16 as an example)
 # The MATLAB code mentions: imagenet-vgg-f.mat, imagenet-vgg-verydeep-19.mat, imagenet-vgg-verydeep-16.mat
@@ -62,53 +63,42 @@ def main_workflow():
 
     # --- 1. Data Loading (Example with IXI dataset) ---
     print("\n--- 1. Data Loading ---")
-    # The MATLAB script loads a small number `n=5` for initial testing.
-    # Adjust `num_subjects_to_load` as needed.
-    num_subjects_to_load = 5 # Small number for quick test
-    
-    # Get list of .nii files
     try:
-        ixi_nii_files_all = [f for f in os.listdir(IXI_DATA_DIR) if f.endswith('.nii') or f.endswith('.nii.gz')]
+
+        # Load and clean demographics dataframe
+        df_demographics = pd.read_excel(IXI_DEMOGRAPHICS_FILE,sheet_name=0)
+        df_demographics_cleaned = df_demographics.dropna(subset=['AGE'])
+
+        df_demographics_cleaned['IXI_ID'] = df_demographics_cleaned['IXI_ID'].astype(int)
+        
+        print("--- Demographics DataFrame After Cleaning (NaN ages removed) ---")
+        print(df_demographics_cleaned)
+    
+        
+        # Get list of .nii files and extract subject IDS from filemames
+        ixi_nii_files_all = [f for f in os.listdir(IXI_IMAGE_DIR) if f.endswith('.nii') or f.endswith('.nii.gz')]
         if not ixi_nii_files_all:
-            print(f"No .nii files found in {IXI_DATA_DIR}. Skipping data loading.")
+            print(f"No .nii files found in {IXI_IMAGE_DIR}. Skipping data loading.")
             return
         
-        # Ensure we don't try to load more files than available
-        actual_num_to_load = min(num_subjects_to_load, len(ixi_nii_files_all))
-        if actual_num_to_load == 0 and num_subjects_to_load > 0 :
-             print(f"Warning: No NIFTI files found to load in {IXI_DATA_DIR}")
-             return
-        elif actual_num_to_load < num_subjects_to_load:
-             print(f"Warning: Requested {num_subjects_to_load} files, but only {actual_num_to_load} found/available.")
+        ixi_nii_files_all = pd.DataFrame(ixi_nii_files_all)
+              
 
-        ixi_nii_file_list_subset = ixi_nii_files_all[:actual_num_to_load]
-
+        
         # Load NIFTI images
         # The load_nifti_slices function expects a list of filenames and the directory.
-        X_ixi_mri_volumes = load_nifti_slices(IXI_DATA_DIR, ixi_nii_file_list_subset, n=actual_num_to_load)
+        ixi_nii_file_list_subset = ixi_nii_files_all[:actual_num_to_load]
+        X_ixi_mri_volumes = load_nifti_slices(IXI_IMAGE_DIR, ixi_nii_file_list_subset, n=actual_num_to_load)
         if not X_ixi_mri_volumes:
             print("Failed to load MRI volumes.")
             return
         print(f"Loaded {len(X_ixi_mri_volumes)} IXI MRI volumes.")
 
-        # Load corresponding ages and RIDs
-        # These files might need specific keys to extract data.
-        ages_data = scipy.io.loadmat(IXI_AGES_FILE)
-        # The MATLAB code `Y_ixi = Y_ixi.age_IXI547(1:n);` implies `age_IXI547` is the key.
-        Y_ixi_ages_all = ages_data['age_IXI547'].flatten() # Adjust key if necessary
-        Y_ixi_ages = Y_ixi_ages_all[:actual_num_to_load]
-
-        rids_data = scipy.io.loadmat(IXI_RIDS_FILE)
-        # The MATLAB code `I_ixi = I_ixi.rid(1:n);` implies `rid` is the key.
-        I_ixi_rids_all = rids_data['RID_IXI'].flatten() # Adjust key 'rid' or 'RID_IXI' as in your file
-        I_ixi_rids = I_ixi_rids_all[:actual_num_to_load]
-        
-        print(f"Loaded {len(Y_ixi_ages)} ages and {len(I_ixi_rids)} RIDs.")
 
     except FileNotFoundError as e:
         print(f"Error: Required data file not found: {e}. Please check paths.")
-        print(f"Attempted to use IXI_DATA_DIR: {IXI_DATA_DIR}")
-        print(f"Attempted age file: {IXI_AGES_FILE}, RID file: {IXI_RIDS_FILE}")
+        print(f"Attempted to use IXI_IMAGE_DIR: {IXI_IMAGE_DIR}")
+        print(f"Attempted demographics file: {IXI_DEMOGRAPHICS_FILE}")
         print("Please create dummy files or point to correct data for testing if actual data is not present.")
         # Create dummy data for workflow to proceed if files are missing
         print("Creating dummy data to proceed with the workflow structure.")
@@ -237,7 +227,7 @@ def main_workflow():
             print("\nTraining Early Fusion model on TS, evaluating on VS:")
             # Create and train the SVR model
             # Parameters C=98, epsilon=0.064 from an example in Early_Fusion.m
-            early_fusion_model = SVR(kernel='linear', C=98, epsilon=0.064)
+            early_fusion_model = svm.SVR(kernel='linear', C=98, epsilon=0.064)
             early_fusion_model.fit(X_ts_aggregated_features, Y_ts_labels)
             
             # Predict on VS
@@ -331,16 +321,16 @@ if __name__ == '__main__':
     # Create dummy directories and files if they don't exist for the example to run
     # This is for the IXI data loading part.
     # In a real scenario, these paths should point to your actual data.
-    if not os.path.exists(IXI_DATA_DIR):
-        os.makedirs(os.path.join(IXI_DATA_DIR, 'tables'), exist_ok=True)
-        print(f"Created dummy directory structure: {IXI_DATA_DIR}")
+    if not os.path.exists(IXI_IMAGE_DIR):
+        os.makedirs(os.path.join(IXI_IMAGE_DIR, 'tables'), exist_ok=True)
+        print(f"Created dummy directory structure: {IXI_IMAGE_DIR}")
         # Create dummy .nii files
         for i in range(10): # Create 10 dummy NIFTI files
             try:
                 import nibabel as nib
                 dummy_nii_data = np.random.rand(10,10,120).astype(np.float32)
                 nif = nib.Nifti1Image(dummy_nii_data, np.eye(4))
-                nib.save(nif, os.path.join(IXI_DATA_DIR, f'dummy_ixi_{i}.nii'))
+                nib.save(nif, os.path.join(IXI_IMAGE_DIR, f'dummy_ixi_{i}.nii'))
             except ImportError:
                 print("nibabel not installed, cannot create dummy .nii files. Skipping.")
                 break
