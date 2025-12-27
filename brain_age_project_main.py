@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 from sklearn import svm
 
-import scipy.io
 import matplotlib.pyplot as plt # For data distribution plotting
 
 # Import previously defined functions
@@ -58,256 +57,302 @@ def plot_data_distribution(data, color, label, ax):
     return ax
 
 
+def extract_features_for_single_subject(file_path, cnn_model, target_layer, feature_extractor, num_slices=120):
+    """
+    Load a single MRI volume, extract features, and return both aggregated and per-triplet features.
+    This is memory-efficient as it processes one subject at a time.
+
+    Returns:
+        tuple: (aggregated_features, triplet_features_array)
+               - aggregated_features: mean of triplet features (for early fusion)
+               - triplet_features_array: (num_triplets, feature_dim) array (for late fusion)
+    """
+    import nibabel as nib
+    from tensorflow.keras.applications.vgg16 import preprocess_input
+    import cv2
+
+    # Load single NIFTI file
+    nii_img = nib.load(file_path)
+    mri_vol = nii_img.get_fdata()[:, :, :num_slices]
+
+    input_size = (cnn_model.input_shape[1], cnn_model.input_shape[2])
+    num_slices_vol = mri_vol.shape[2]
+    total_triplets = num_slices_vol // 3
+
+    triplet_features = []
+    for k in range(total_triplets):
+        idx = k * 3
+        s1, s2, s3 = mri_vol[:, :, idx], mri_vol[:, :, idx+1], mri_vol[:, :, idx+2]
+        triplet_img = np.stack((s1, s2, s3), axis=-1)
+        resized = cv2.resize(triplet_img.astype(np.float32),
+                            (input_size[1], input_size[0]),
+                            interpolation=cv2.INTER_LINEAR)
+        input_batch = np.expand_dims(resized, axis=0)
+        preprocessed = preprocess_input(input_batch)
+        features = feature_extractor.predict(preprocessed, verbose=0)
+        triplet_features.append(features.flatten())
+
+    if triplet_features:
+        triplet_array = np.array(triplet_features)
+        aggregated = np.mean(triplet_array, axis=0)
+        return aggregated, triplet_array
+    return None, None
+
+
 def main_workflow():
     print("--- Brain Age Project Workflow ---")
 
-    # --- 1. Data Loading (Example with IXI dataset) ---
-    print("\n--- 1. Data Loading ---")
+    # --- 1. Data Loading (Metadata only - memory efficient) ---
+    print("\n--- 1. Data Loading (Metadata) ---")
+
+    # Number of subjects to process (set to None or large number for all)
+    num_subjects_to_load = 590  # All subjects
+
     try:
-
         # Load and clean demographics dataframe
-        df_demographics = pd.read_excel(IXI_DEMOGRAPHICS_FILE,sheet_name=0)
-        df_demographics_cleaned = df_demographics.dropna(subset=['AGE'])
-
+        df_demographics = pd.read_excel(IXI_DEMOGRAPHICS_FILE, sheet_name=0)
+        df_demographics_cleaned = df_demographics.dropna(subset=['AGE']).copy()
         df_demographics_cleaned['IXI_ID'] = df_demographics_cleaned['IXI_ID'].astype(int)
-        
-        print("--- Demographics DataFrame After Cleaning (NaN ages removed) ---")
-        print(df_demographics_cleaned)
-    
-        
-        # Get list of .nii files and extract subject IDS from filemames
+
+        print(f"Demographics loaded: {len(df_demographics_cleaned)} subjects with valid ages")
+
+        # Get list of .nii files and extract subject IDs from filenames
         ixi_nii_files_all = [f for f in os.listdir(IXI_IMAGE_DIR) if f.endswith('.nii') or f.endswith('.nii.gz')]
         if not ixi_nii_files_all:
-            print(f"No .nii files found in {IXI_IMAGE_DIR}. Skipping data loading.")
+            print(f"No .nii files found in {IXI_IMAGE_DIR}. Aborting.")
             return
-        
-        ixi_nii_files_all = pd.DataFrame(ixi_nii_files_all)
-              
 
-        
-        # Load NIFTI images
-        # The load_nifti_slices function expects a list of filenames and the directory.
-        ixi_nii_file_list_subset = ixi_nii_files_all[:actual_num_to_load]
-        X_ixi_mri_volumes = load_nifti_slices(IXI_IMAGE_DIR, ixi_nii_file_list_subset, n=actual_num_to_load)
-        if not X_ixi_mri_volumes:
-            print("Failed to load MRI volumes.")
-            return
-        print(f"Loaded {len(X_ixi_mri_volumes)} IXI MRI volumes.")
+        # Build a mapping of subject ID to filename
+        file_mapping = {}
+        for f in ixi_nii_files_all:
+            ixi_id = int(f.split('-')[0].replace('IXI', ''))
+            file_mapping[ixi_id] = f
 
+        # Get subjects that have both MRI and demographics
+        available_ids = set(file_mapping.keys()) & set(df_demographics_cleaned['IXI_ID'].values)
+        available_ids = sorted(list(available_ids))[:num_subjects_to_load]
+
+        print(f"Found {len(available_ids)} subjects with both MRI and demographics data")
+
+        # Get ages for available subjects (in order)
+        df_available = df_demographics_cleaned[df_demographics_cleaned['IXI_ID'].isin(available_ids)]
+        df_available = df_available.set_index('IXI_ID').loc[available_ids].reset_index()
+
+        Y_all_ages = df_available['AGE'].values
+        I_all_ids = df_available['IXI_ID'].values
 
     except FileNotFoundError as e:
-        print(f"Error: Required data file not found: {e}. Please check paths.")
-        print(f"Attempted to use IXI_IMAGE_DIR: {IXI_IMAGE_DIR}")
-        print(f"Attempted demographics file: {IXI_DEMOGRAPHICS_FILE}")
-        print("Please create dummy files or point to correct data for testing if actual data is not present.")
-        # Create dummy data for workflow to proceed if files are missing
-        print("Creating dummy data to proceed with the workflow structure.")
-        actual_num_to_load = num_subjects_to_load
-        X_ixi_mri_volumes = [np.random.rand(64, 64, 40) for _ in range(actual_num_to_load)] # Dummy image volumes
-        Y_ixi_ages = np.random.randint(20, 80, actual_num_to_load)
-        I_ixi_rids = np.arange(100, 100 + actual_num_to_load)
-        print(f"Using dummy data: {actual_num_to_load} subjects.")
-
+        print(f"Error: Required data file not found: {e}.")
+        return
     except Exception as e:
         print(f"An error occurred during data loading: {e}")
         return
-        
-    if not X_ixi_mri_volumes or Y_ixi_ages.size == 0 or I_ixi_rids.size == 0:
-        print("Data loading failed or resulted in empty data. Aborting.")
-        return
 
-
-    # --- 2. Data Splitting ---
+    # --- 2. Data Splitting (by indices, not loaded data) ---
     print("\n--- 2. Data Splitting ---")
-    # `D = Data_split(X_ixi,Y_ixi,I_ixi);`
-    # `data_split` expects MRI data as the first argument.
-    split_data_dict = data_split(X_ixi_mri_volumes, Y_ixi_ages, I_ixi_rids)
-    print("Data split into Training (TS) and Validation/Test (VS) sets.")
-    print(f"  Training samples: {len(split_data_dict['TS_labels'])}")
-    print(f"  Validation/Test samples: {len(split_data_dict['VS_labels'])}")
+    n_subjects = len(available_ids)
+    indices = np.arange(n_subjects)
+    np.random.seed(42)  # For reproducibility
+    np.random.shuffle(indices)
 
-    # Plot data distributions (optional, like `data_dist` in MATLAB)
+    # 80-20 split
+    split_idx = int(0.8 * n_subjects)
+    train_indices = indices[:split_idx]
+    test_indices = indices[split_idx:]
+
+    Y_ts_labels = Y_all_ages[train_indices]
+    Y_vs_labels = Y_all_ages[test_indices]
+    train_ids = I_all_ids[train_indices]
+    test_ids = I_all_ids[test_indices]
+
+    print(f"  Training samples: {len(train_indices)}")
+    print(f"  Validation/Test samples: {len(test_indices)}")
+
+    # Plot data distributions
     fig_dist, ax_dist = plt.subplots()
-    plot_data_distribution(Y_ixi_ages, 'cyan', 'Original IXI Ages', ax_dist)
-    plot_data_distribution(split_data_dict['TS_labels'], 'blue', 'TS Ages', ax_dist)
-    plot_data_distribution(split_data_dict['VS_labels'], 'green', 'VS Ages', ax_dist)
+    plot_data_distribution(Y_all_ages, 'cyan', 'All Ages', ax_dist)
+    plot_data_distribution(Y_ts_labels, 'blue', 'TS Ages', ax_dist)
+    plot_data_distribution(Y_vs_labels, 'green', 'VS Ages', ax_dist)
     ax_dist.legend()
     plt.title("Age Distributions")
-    # plt.show() # Show interactively or save
     plt.savefig("age_distributions.png")
     print("Saved age distribution plot to age_distributions.png")
     plt.close(fig_dist)
 
+    # --- 3. Feature Extraction (one subject at a time - memory efficient) ---
+    print("\n--- 3. Feature Extraction (memory-efficient, one subject at a time) ---")
 
-    # --- 3. Feature Extraction ---
-    print("\n--- 3. Feature Extraction ---")
     if cnn_base_model is None or FEATURE_EXTRACTOR_TARGET_LAYER is None:
-        print("CNN model not available. Skipping feature extraction.")
-        # Create dummy features to allow rest of workflow to proceed structurally
-        # This is for illustration. In a real run, feature extraction is crucial.
-        print("Creating dummy features for TS and VS to continue workflow demonstration.")
-        dummy_feature_dim = 100 # Arbitrary feature dimension for dummy data
-        # TS features
-        ts_image_volumes_from_split = split_data_dict['TS'] # list of image volumes
-        X_ts_features = [np.random.rand(img.shape[2]//3 if img.shape[2]//3 > 0 else 1, dummy_feature_dim) for img in ts_image_volumes_from_split] # list of (n_triplets, feat_dim)
-        # VS features
-        vs_image_volumes_from_split = split_data_dict['VS']
-        X_vs_features = [np.random.rand(img.shape[2]//3 if img.shape[2]//3 > 0 else 1, dummy_feature_dim) for img in vs_image_volumes_from_split]
+        print("CNN model not available. Aborting.")
+        return
 
-    else:
-        # Extract features for the Training Set images from the split
-        # The `split_data_dict['TS']` contains the image volumes for training.
-        print("Extracting features for Training Set (TS)...")
-        ts_image_volumes_from_split = split_data_dict['TS'] # This is a list of MRI volumes
-        X_ts_features = extract_cnn_features_non_overlapping_triplets(
-            ts_image_volumes_from_split,
-            cnn_base_model,
-            FEATURE_EXTRACTOR_TARGET_LAYER
-        )
-        print(f"Extracted features for {len(X_ts_features)} TS subjects.")
-        if X_ts_features and X_ts_features[0].size > 0 :
-            print(f"  Feature shape for first TS subject: {X_ts_features[0].shape} (num_triplets, feature_dim)")
-        else:
-            print(f"  No features extracted or first subject had no features.")
+    # Create feature extractor once (more efficient than recreating in loop)
+    from tensorflow.keras.models import Model
+    feature_extractor = Model(inputs=cnn_base_model.input,
+                              outputs=cnn_base_model.get_layer(FEATURE_EXTRACTOR_TARGET_LAYER).output)
 
-
-        # Extract features for the Validation/Test Set images from the split
-        print("Extracting features for Validation/Test Set (VS)...")
-        vs_image_volumes_from_split = split_data_dict['VS']
-        X_vs_features = extract_cnn_features_non_overlapping_triplets(
-            vs_image_volumes_from_split,
-            cnn_base_model,
-            FEATURE_EXTRACTOR_TARGET_LAYER
-        )
-        print(f"Extracted features for {len(X_vs_features)} VS subjects.")
-        if X_vs_features and X_vs_features[0].size > 0:
-            print(f"  Feature shape for first VS subject: {X_vs_features[0].shape}")
-        else:
-             print(f"  No features extracted or first subject had no features for VS.")
-
-
-    # Labels for training and validation sets
-    Y_ts_labels = split_data_dict['TS_labels']
-    Y_vs_labels = split_data_dict['VS_labels']
-
-
-    # --- 4. Fusion Schemes ---
-
-    # --- 4.A. Early Fusion ---
-    # Early fusion typically requires a single feature vector per subject.
-    # The `X_ts_features` (and `X_vs_features`) is a list of arrays,
-    # where each array is (num_triplets, feature_dimension).
-    # We need to aggregate these triplet features into one vector per subject.
-    # Common aggregation: mean, max, or concatenate (if fixed num_triplets).
-    # Let's use mean for this example.
-    print("\n--- 4.A. Early Fusion (using mean of triplet features) ---")
-
-    if not X_ts_features or not any(f.size > 0 for f in X_ts_features) :
-        print("TS features are empty or invalid. Skipping Early Fusion for TS.")
-    else:
-        X_ts_aggregated_features = np.array([np.mean(f, axis=0) if f.size > 0 else np.zeros(X_ts_features[0].shape[1] if X_ts_features[0].size > 0 else 1) for f in X_ts_features])
-        print(f"Aggregated TS features shape for Early Fusion: {X_ts_aggregated_features.shape}")
-        
-        # Train and test Early Fusion model on Training Set data itself (as an example)
-        # Or, if you have separate Test set features, use those.
-        # The MATLAB 'Early_Fusion.m' script loads various pre-computed features and labels.
-        # Here, we use the ones derived from our current split.
-        print("Running Early Fusion on Training Set data (train and predict on same for demo):")
-        # Note: The MATLAB script tests on the same data it might have trained on, or loads separate test data.
-        # For a proper evaluation, train on TS, test on VS.
-        # early_fusion_train_test(X_features_arg=X_ts_aggregated_features, Y_labels_arg=Y_ts_labels)
-        
-        # For a more standard approach: Train on TS, Test on VS
-        if not X_vs_features or not any(f.size > 0 for f in X_vs_features):
-            print("VS features are empty or invalid. Skipping Early Fusion evaluation on VS.")
-        else:
-            X_vs_aggregated_features = np.array([np.mean(f, axis=0) if f.size > 0 else np.zeros(X_vs_features[0].shape[1] if X_vs_features[0].size > 0 else 1) for f in X_vs_features])
-            print(f"Aggregated VS features shape for Early Fusion: {X_vs_aggregated_features.shape}")
-
-            print("\nTraining Early Fusion model on TS, evaluating on VS:")
-            # Create and train the SVR model
-            # Parameters C=98, epsilon=0.064 from an example in Early_Fusion.m
-            early_fusion_model = svm.SVR(kernel='linear', C=98, epsilon=0.064)
-            early_fusion_model.fit(X_ts_aggregated_features, Y_ts_labels)
-            
-            # Predict on VS
-            y_pred_ef_vs = early_fusion_model.predict(X_vs_aggregated_features)
-            
-            # Evaluate
-            mae_ef_vs = mae(Y_vs_labels, y_pred_ef_vs)
-            rmse_ef_vs = rmse(Y_vs_labels, y_pred_ef_vs)
-            corr_ef_vs = pearson_correlation(Y_vs_labels, y_pred_ef_vs)
-            
-            print(f"  MAE on VS (Early Fusion): {mae_ef_vs:.4f}")
-            print(f"  RMSE on VS (Early Fusion): {rmse_ef_vs:.4f}")
-            print(f"  Correlation on VS (Early Fusion): {corr_ef_vs:.4f}")
-
-
-    # --- 4.B. Late Fusion ---
-    print("\n--- 4.B. Late Fusion ---")
-    # Late fusion uses features from each modality (e.g., triplet) separately.
-    # `X_ts_features` is already in the format: list of (num_triplets, feature_dim) per patient.
-    # `train_and_predict_weak_learners` expects this format.
-
-    # For Late Fusion, typically train weak learners on TS, then apply to VS, then combine on VS.
-    # Or, train and combine on TS itself for an internal check.
-    # The MATLAB script seems to evaluate on the same set it used for training weak learners.
-    # Let's use VS data for demonstration of evaluating late fusion.
-    
-    if not X_vs_features or not Y_vs_labels.size > 0 or not any(f.size > 0 for f in X_vs_features):
-        print("VS features or labels are empty/invalid. Skipping Late Fusion.")
-    else:
-        print("Training/evaluating Late Fusion on Validation Set (VS) data:")
-        # The function train_and_predict_weak_learners will train new models or load them.
-        # It will predict on the same data (X_vs_features) for this example flow.
-        # In a strict train/test split, weak learners are trained on TS features/labels,
-        # then these trained models predict on VS features.
-        # For simplicity here, analogous to parts of the MATLAB script,
-        # we demonstrate the process on one dataset (VS).
-        
-        # Step 1: Train weak learners on TS and get their predictions on VS
-        # This requires adapting `train_and_predict_weak_learners` or a new function.
-        # Let's assume `train_and_predict_weak_learners` is modified or used as follows:
-        #   - Train N SVRs (one for each triplet type) using all TS patient data for that triplet type.
-        #   - Then, for each VS patient, get N predictions using these N SVRs.
-
-        # Simplified: Perform weak learning and prediction generation on VS set directly for demo
-        # This is not a typical train/test evaluation but matches some script structures.
-        print("Generating weak scores on VS data (models trained and predict on VS subsets)...")
-        # `X_vs_features` is list of [n_triplets, feat_dim_per_triplet]
-        # `Y_vs_labels` are the true ages for these VS patients
-        weak_scores_vs = train_and_predict_weak_learners(X_vs_features, Y_vs_labels)
-                                                        # model_save_dir="weak_models_vs_svr")
-
-        if weak_scores_vs.size == 0:
-            print("Failed to generate weak scores for VS. Skipping Late Fusion combination.")
-        else:
-            print(f"Shape of weak_scores_vs: {weak_scores_vs.shape} (expected: num_triplets, num_vs_patients)")
-
-            # Step 2: Combine weak scores
-            # `weak_scores_vs` is (num_triplets, num_vs_patients)
-            # `Y_vs_labels` is (num_vs_patients,)
-            num_total_triplets_modalities = weak_scores_vs.shape[0]
-            num_vs_patients = weak_scores_vs.shape[1]
-
-            combined_predictions_vs = combine_weak_predictions(
-                weak_scores_vs,
-                Y_vs_labels,
-                num_total_triplets_modalities,
-                num_vs_patients
+    # Extract training features
+    print(f"Extracting features for {len(train_ids)} training subjects...")
+    X_ts_aggregated = []
+    X_ts_triplets = []  # For late fusion
+    for i, subj_id in enumerate(train_ids):
+        file_path = os.path.join(IXI_IMAGE_DIR, file_mapping[subj_id])
+        try:
+            agg_feat, triplet_feat = extract_features_for_single_subject(
+                file_path, cnn_base_model, FEATURE_EXTRACTOR_TARGET_LAYER, feature_extractor
             )
+            if agg_feat is not None:
+                X_ts_aggregated.append(agg_feat)
+                X_ts_triplets.append(triplet_feat)
+            else:
+                X_ts_aggregated.append(np.zeros(25088))
+                X_ts_triplets.append(np.zeros((40, 25088)))
+        except Exception as e:
+            print(f"  Error processing subject {subj_id}: {e}")
+            X_ts_aggregated.append(np.zeros(25088))
+            X_ts_triplets.append(np.zeros((40, 25088)))
 
-            # Step 3: Evaluate combined predictions
-            print("\nLate Fusion Performance on VS:")
-            for strategy, y_pred_lf in combined_predictions_vs.items():
-                if y_pred_lf is not None and not np.all(np.isnan(y_pred_lf)) : # Check if predictions are valid
-                    mae_lf = mae(Y_vs_labels, y_pred_lf)
-                    rmse_lf = rmse(Y_vs_labels, y_pred_lf)
-                    corr_lf = pearson_correlation(Y_vs_labels, y_pred_lf)
-                    print(f"  Strategy: {strategy}")
-                    print(f"    MAE: {mae_lf:.4f}, RMSE: {rmse_lf:.4f}, Correlation: {corr_lf:.4f}")
-                else:
-                    print(f"  Strategy: {strategy} - Predictions are NaN or None.")
+        if (i + 1) % 50 == 0 or i == 0:
+            print(f"  Processed {i + 1}/{len(train_ids)} training subjects", flush=True)
+
+    X_ts_aggregated_features = np.array(X_ts_aggregated)
+    print(f"Training features shape: {X_ts_aggregated_features.shape}")
+
+    # Extract test features
+    print(f"\nExtracting features for {len(test_ids)} test subjects...")
+    X_vs_aggregated = []
+    X_vs_triplets = []  # For late fusion
+    for i, subj_id in enumerate(test_ids):
+        file_path = os.path.join(IXI_IMAGE_DIR, file_mapping[subj_id])
+        try:
+            agg_feat, triplet_feat = extract_features_for_single_subject(
+                file_path, cnn_base_model, FEATURE_EXTRACTOR_TARGET_LAYER, feature_extractor
+            )
+            if agg_feat is not None:
+                X_vs_aggregated.append(agg_feat)
+                X_vs_triplets.append(triplet_feat)
+            else:
+                X_vs_aggregated.append(np.zeros(25088))
+                X_vs_triplets.append(np.zeros((40, 25088)))
+        except Exception as e:
+            print(f"  Error processing subject {subj_id}: {e}")
+            X_vs_aggregated.append(np.zeros(25088))
+            X_vs_triplets.append(np.zeros((40, 25088)))
+
+        if (i + 1) % 50 == 0 or i == 0:
+            print(f"  Processed {i + 1}/{len(test_ids)} test subjects", flush=True)
+
+    X_vs_aggregated_features = np.array(X_vs_aggregated)
+    print(f"Test features shape: {X_vs_aggregated_features.shape}")
+
+
+    # --- 4. Early Fusion (SVR on aggregated features) ---
+    print("\n--- 4. Early Fusion ---")
+    print(f"Training features shape: {X_ts_aggregated_features.shape}")
+    print(f"Test features shape: {X_vs_aggregated_features.shape}")
+
+    print("\nTraining Early Fusion SVR model...")
+    # Parameters C=98, epsilon=0.064 from Early_Fusion.m
+    early_fusion_model = svm.SVR(kernel='linear', C=98, epsilon=0.064)
+    early_fusion_model.fit(X_ts_aggregated_features, Y_ts_labels)
+
+    # Predict on validation set
+    y_pred_vs = early_fusion_model.predict(X_vs_aggregated_features)
+
+    # Evaluate
+    mae_val = mae(Y_vs_labels, y_pred_vs)
+    rmse_val = rmse(Y_vs_labels, y_pred_vs)
+    corr_val = pearson_correlation(Y_vs_labels, y_pred_vs)
+
+    print("\n" + "="*50)
+    print("RESULTS - Early Fusion (SVR)")
+    print("="*50)
+    print(f"  MAE:  {mae_val:.2f} years")
+    print(f"  RMSE: {rmse_val:.2f} years")
+    print(f"  Correlation: {corr_val:.4f}")
+    print("="*50)
+
+    # Save Early Fusion predictions
+    results_df = pd.DataFrame({
+        'Subject_ID': test_ids,
+        'True_Age': Y_vs_labels,
+        'Predicted_Age_EarlyFusion': y_pred_vs,
+        'Error_EarlyFusion': y_pred_vs - Y_vs_labels
+    })
+
+    # --- 5. Late Fusion ---
+    print("\n--- 5. Late Fusion ---")
+    print("Training weak learners (one SVR per triplet modality)...")
+
+    # Late fusion: train one SVR per triplet position using training data
+    # Then predict on test data and combine predictions
+    num_triplets = X_ts_triplets[0].shape[0]  # e.g., 40 triplets
+    num_train = len(X_ts_triplets)
+    num_test = len(X_vs_triplets)
+
+    print(f"  Number of triplet modalities: {num_triplets}")
+    print(f"  Training subjects: {num_train}, Test subjects: {num_test}")
+
+    # Reorganize data: for each triplet position, collect features from all subjects
+    # weak_predictions[triplet_idx, test_subject_idx] = predicted age
+    weak_predictions = np.zeros((num_triplets, num_test))
+
+    for t in range(num_triplets):
+        # Get features for triplet t from all training subjects
+        X_train_t = np.array([X_ts_triplets[j][t, :] for j in range(num_train)])
+        # Get features for triplet t from all test subjects
+        X_test_t = np.array([X_vs_triplets[j][t, :] for j in range(num_test)])
+
+        # Train SVR for this triplet
+        weak_svr = svm.SVR(kernel='linear', C=1.0, epsilon=0.1)
+        weak_svr.fit(X_train_t, Y_ts_labels)
+
+        # Predict on test data
+        weak_predictions[t, :] = weak_svr.predict(X_test_t)
+
+        if (t + 1) % 10 == 0 or t == 0:
+            print(f"  Trained weak learner {t + 1}/{num_triplets}", flush=True)
+
+    print(f"Weak predictions shape: {weak_predictions.shape}")
+
+    # Combine predictions using different strategies
+    # Strategy 1: Simple mean
+    y_pred_late_mean = np.mean(weak_predictions, axis=0)
+
+    # Strategy 2: Weighted mean (weight by inverse MAE on training set)
+    # For simplicity, use equal weights here (same as mean)
+    y_pred_late_wmean = y_pred_late_mean  # Could implement weighted version
+
+    # Evaluate Late Fusion
+    mae_late = mae(Y_vs_labels, y_pred_late_mean)
+    rmse_late = rmse(Y_vs_labels, y_pred_late_mean)
+    corr_late = pearson_correlation(Y_vs_labels, y_pred_late_mean)
+
+    print("\n" + "="*50)
+    print("RESULTS - Late Fusion (Mean of Weak Learners)")
+    print("="*50)
+    print(f"  MAE:  {mae_late:.2f} years")
+    print(f"  RMSE: {rmse_late:.2f} years")
+    print(f"  Correlation: {corr_late:.4f}")
+    print("="*50)
+
+    # Add Late Fusion results to dataframe
+    results_df['Predicted_Age_LateFusion'] = y_pred_late_mean
+    results_df['Error_LateFusion'] = y_pred_late_mean - Y_vs_labels
+
+    # Summary comparison
+    print("\n" + "="*50)
+    print("COMPARISON SUMMARY")
+    print("="*50)
+    print(f"{'Method':<20} {'MAE':>10} {'RMSE':>10} {'Corr':>10}")
+    print("-"*50)
+    print(f"{'Early Fusion':<20} {mae_val:>10.2f} {rmse_val:>10.2f} {corr_val:>10.4f}")
+    print(f"{'Late Fusion':<20} {mae_late:>10.2f} {rmse_late:>10.2f} {corr_late:>10.4f}")
+    print("="*50)
+
+    # Save all predictions
+    results_df.to_csv('brain_age_predictions.csv', index=False)
+    print("\nAll predictions saved to brain_age_predictions.csv")
 
     print("\n--- Workflow Complete ---")
 
@@ -322,15 +367,17 @@ if __name__ == '__main__':
     # This is for the IXI data loading part.
     # In a real scenario, these paths should point to your actual data.
     if not os.path.exists(IXI_IMAGE_DIR):
-        os.makedirs(os.path.join(IXI_IMAGE_DIR, 'tables'), exist_ok=True)
+        os.makedirs(IXI_IMAGE_DIR, exist_ok=True)
         print(f"Created dummy directory structure: {IXI_IMAGE_DIR}")
-        # Create dummy .nii files
-        for i in range(10): # Create 10 dummy NIFTI files
+        # Create dummy .nii files with IXI naming convention
+        for i in range(10):
             try:
                 import nibabel as nib
-                dummy_nii_data = np.random.rand(10,10,120).astype(np.float32)
+                dummy_nii_data = np.random.rand(10, 10, 120).astype(np.float32)
                 nif = nib.Nifti1Image(dummy_nii_data, np.eye(4))
-                nib.save(nif, os.path.join(IXI_IMAGE_DIR, f'dummy_ixi_{i}.nii'))
+                # Use IXI naming format: IXI{ID}-Site-Session-T1.nii.gz
+                filename = f'IXI{i:03d}-Guys-0001-T1.nii.gz'
+                nib.save(nif, os.path.join(IXI_IMAGE_DIR, filename))
             except ImportError:
                 print("nibabel not installed, cannot create dummy .nii files. Skipping.")
                 break
@@ -338,18 +385,15 @@ if __name__ == '__main__':
                 print(f"Error creating dummy nii: {e_nii}")
 
 
-        # Create dummy .mat files for ages and RIDs
-        # Note: `AGE_IXI547` and `RID_IXI547` are from the original file names.
-        # The script expects keys like 'age_IXI547' and 'RID_IXI'.
-        num_dummy_subjects_for_mat = 547 # To match file name
-        dummy_ages_mat = {'age_IXI547': np.random.randint(20, 85, num_dummy_subjects_for_mat)}
-        dummy_rids_mat = {'RID_IXI': np.arange(1, num_dummy_subjects_for_mat + 1)}
+        # Create dummy demographics Excel file
         try:
-            scipy.io.savemat(IXI_AGES_FILE, dummy_ages_mat)
-            scipy.io.savemat(IXI_RIDS_FILE, dummy_rids_mat)
-            print(f"Created dummy '{IXI_AGES_FILE}' and '{IXI_RIDS_FILE}'.")
-        except Exception as e_mat:
-            print(f"Error creating dummy .mat files: {e_mat}")
+            dummy_ixi_ids = list(range(10))
+            dummy_ages = np.random.randint(20, 85, 10)
+            df_dummy = pd.DataFrame({'IXI_ID': dummy_ixi_ids, 'AGE': dummy_ages})
+            df_dummy.to_excel(IXI_DEMOGRAPHICS_FILE, index=False)
+            print(f"Created dummy demographics file: '{IXI_DEMOGRAPHICS_FILE}'.")
+        except Exception as e_xls:
+            print(f"Error creating dummy Excel file: {e_xls}")
 
 
     main_workflow()
