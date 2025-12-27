@@ -16,14 +16,17 @@ This project implements brain age prediction using VGG16 features extracted from
 - Support Vector Regression (SVR) for age prediction
 - Both Early and Late Fusion strategies
 - Google Colab notebook with GPU acceleration
+- **Interactive Streamlit web demo**
 - Comprehensive evaluation metrics (MAE, RMSE, Pearson correlation)
 
 ## Project Structure
 
 ```
 .
+├── app.py                       # Streamlit web demo
 ├── brain_age_project_main.py    # Main workflow script
 ├── Brain_Age_Colab.ipynb        # Google Colab notebook (GPU-accelerated)
+├── requirements.txt             # Python dependencies
 ├── feature_extraction.py        # CNN feature extraction utilities
 ├── early_fusion.py              # Early fusion implementation
 ├── late_fusion.py               # Late fusion with weak learners
@@ -94,6 +97,21 @@ python brain_age_project_main.py
 2. Open `Brain_Age_Colab.ipynb` in [Google Colab](https://colab.research.google.com)
 3. Enable GPU: Runtime > Change runtime type > GPU
 4. Update the data paths and run all cells
+
+### Streamlit Demo
+
+Run the interactive web demo locally:
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The demo includes:
+- Upload and analyze your own MRI scans
+- View sample prediction results
+- Interactive visualizations
+- Download prediction reports
 
 ## Methods
 
