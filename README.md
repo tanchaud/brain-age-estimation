@@ -1,38 +1,38 @@
 # Brain Age Estimation from MRI
 
-A Python pipeline for predicting brain age from T1-weighted MRI scans using deep learning features and machine learning regression.
+A Python pipeline for predicting brain age from T1-weighted MRI scans using deep learning.
 
 ## Overview
 
-This project implements brain age prediction using VGG16 features extracted from MRI brain scans. It compares two fusion strategies:
+This project implements brain age prediction from T1-weighted MRI scans. It supports two modelling approaches:
 
-- **Early Fusion**: Aggregate features across brain slices, then train a single SVR model
-- **Late Fusion**: Train separate SVR models for each slice position, then combine predictions
+- **3D ResNet-18** *(current, recommended)*: End-to-end 3D CNN trained directly for age regression — no separate feature extraction step
+- **VGG16 + SVR** *(legacy)*: VGG16 feature extraction from slice triplets combined with Support Vector Regression using Early or Late Fusion
 
 ## Features
 
-- Memory-efficient processing (handles 500+ subjects without running out of memory)
-- VGG16-based deep feature extraction from MRI triplet slices
-- Support Vector Regression (SVR) for age prediction
-- Both Early and Late Fusion strategies
-- Google Colab notebook with GPU acceleration
-- **Interactive Streamlit web demo**
+- End-to-end 3D ResNet-18 trained on full MRI volumes
+- MONAI-based preprocessing pipeline (reorientation, resampling, normalisation)
+- Dataset cleaning step to automatically detect and skip corrupt/blank scans
+- Mixed-precision training (AMP) for fast Colab GPU execution
+- Two interactive Streamlit web demos (3D ResNet and VGG16+SVR)
 - Comprehensive evaluation metrics (MAE, RMSE, Pearson correlation)
+- Memory-efficient design supporting 500+ subjects
 
 ## Project Structure
 
 ```
 .
-├── app.py                       # Streamlit web demo
-├── brain_age_project_main.py    # Main workflow script
-├── Brain_Age_Colab.ipynb        # Google Colab notebook (GPU-accelerated)
-├── requirements.txt             # Python dependencies
-├── feature_extraction.py        # CNN feature extraction utilities
-├── early_fusion.py              # Early fusion implementation
+├── app_resnet3d.py              # Streamlit demo — 3D ResNet-18 (current)
+├── app.py                       # Streamlit demo — VGG16 + SVR (legacy)
+├── BrainAge_3DResNet_Colab.ipynb  # Colab notebook — end-to-end 3D ResNet training
+├── brain_age_project_main.py    # Legacy workflow script (VGG16 + SVR)
+├── feature_extraction.py        # VGG16 triplet feature extraction
+├── early_fusion.py              # Early fusion SVR
 ├── late_fusion.py               # Late fusion with weak learners
-├── data_split.py                # Train/test splitting
-├── load_nifti.py                # NIFTI file loading
 ├── concat_predictions.py        # Prediction combination strategies
+├── data_split.py                # Train/test splitting (age-sorted, 75/25)
+├── load_nifti.py                # NIfTI file loading
 ├── mae.py                       # Mean Absolute Error metric
 ├── rmse.py                      # Root Mean Squared Error metric
 ├── pearson_corr.py              # Pearson correlation metric
@@ -41,117 +41,111 @@ This project implements brain age prediction using VGG16 features extracted from
 
 ## Requirements
 
-- Python 3.8+
-- TensorFlow 2.x
-- NumPy
-- Pandas
-- scikit-learn
-- OpenCV (cv2)
-- nibabel
-- matplotlib
-- openpyxl / xlrd (for Excel file support)
+### 3D ResNet-18 (current model)
 
-Install dependencies:
+- Python 3.8+
+- PyTorch 2.x
+- MONAI
+- nibabel
+- matplotlib, pandas, openpyxl
+
 ```bash
-pip install tensorflow numpy pandas scikit-learn opencv-python nibabel matplotlib openpyxl xlrd
+pip install torch monai nibabel matplotlib pandas openpyxl streamlit
 ```
 
-Or with conda:
+### VGG16 + SVR (legacy)
+
 ```bash
-conda install -c conda-forge tensorflow numpy pandas scikit-learn opencv nibabel matplotlib openpyxl xlrd
+pip install tensorflow numpy pandas scikit-learn opencv-python nibabel matplotlib openpyxl
 ```
 
 ## Dataset
 
-This pipeline is designed for the [IXI Dataset](https://brain-development.org/ixi-dataset/):
-- T1-weighted MRI scans (NIFTI format)
-- Demographics file with subject ages (Excel format)
+Designed for the [IXI Dataset](https://brain-development.org/ixi-dataset/):
+- T1-weighted MRI scans (NIfTI format)
+- Demographics Excel file with subject ages
 
-Expected data structure:
+Expected structure:
 ```
 Data_IXI/
 ├── IXI-T1/
 │   ├── IXI002-Guys-0828-T1.nii.gz
 │   ├── IXI012-HH-1234-T1.nii.gz
 │   └── ...
-└── IXI.xls  (demographics with IXI_ID and AGE columns)
+└── IXI.xls   (columns: IXI_ID, AGE)
 ```
 
 ## Usage
 
-### Local Execution
+### 3D ResNet-18 — Google Colab (Recommended)
 
-1. Update the data paths in `brain_age_project_main.py`:
-```python
-DATA_BASE_DIR = '/path/to/your/Data_IXI'
-```
+1. Upload data to Google Drive
+2. Open `BrainAge_3DResNet_Colab.ipynb` in [Google Colab](https://colab.research.google.com)
+3. Enable GPU: *Runtime → Change runtime type → T4 GPU*
+4. Edit the three path variables (`NII_DIR`, `DEMOGRAPHICS`, `CHECKPOINT_DIR`)
+5. Run all cells — best model saved automatically to `CHECKPOINT_DIR/best_resnet3d.pth`
 
-2. Run the workflow:
-```bash
-python brain_age_project_main.py
-```
-
-### Google Colab (Recommended for faster processing)
-
-1. Upload your data to Google Drive
-2. Open `Brain_Age_Colab.ipynb` in [Google Colab](https://colab.research.google.com)
-3. Enable GPU: Runtime > Change runtime type > GPU
-4. Update the data paths and run all cells
-
-### Streamlit Demo
-
-Run the interactive web demo locally:
+### Streamlit Demo — 3D ResNet-18
 
 ```bash
-pip install -r requirements.txt
+streamlit run app_resnet3d.py
+```
+
+1. Download `best_resnet3d.pth` from Google Drive to your local machine
+2. Enter its local path in the **Model Checkpoint** sidebar field
+3. Upload any `.nii` / `.nii.gz` file to get a brain age prediction
+
+### Streamlit Demo — VGG16 + SVR (legacy)
+
+```bash
 streamlit run app.py
 ```
 
-The demo includes:
-- Upload and analyze your own MRI scans
-- View sample prediction results
-- Interactive visualizations
-- Download prediction reports
-
 ## Methods
 
-### Feature Extraction
+### 3D ResNet-18 (Current)
 
-- MRI volumes are divided into non-overlapping triplets of consecutive slices
-- Each triplet is treated as a pseudo-RGB image and resized to 224x224
-- VGG16 (pretrained on ImageNet) extracts features from `block5_pool` layer
-- Output: 25,088-dimensional feature vector per triplet
+| Step | Detail |
+|------|--------|
+| Preprocessing | RAS reorientation → 2 mm isotropic resampling → pad/crop to 96³ → z-score normalisation |
+| Architecture | 3D ResNet-18: stem (7³ conv) + 4 residual stages (64→128→256→512 ch) + AdaptiveAvgPool → FC(1) |
+| Training | L1 loss, Adam (lr=1e-4), cosine LR annealing, dropout=0.3, AMP, batch size 2 |
+| Dataset cleaning | Corrupt files, <3D volumes, dimensions <32 voxels, NaN/Inf, blank scans are dropped automatically |
 
-### Early Fusion
+### VGG16 + SVR (Legacy)
 
-1. Extract features for all triplets per subject
-2. Aggregate by taking the mean across triplets
-3. Train a single linear SVR on aggregated features
-4. Predict age for test subjects
-
-### Late Fusion
-
-1. For each triplet position (e.g., 40 positions), train a separate SVR
-2. Each "weak learner" predicts age based on that slice position
-3. Combine predictions by averaging across all weak learners
+- MRI volumes divided into non-overlapping triplets of 3 consecutive axial slices
+- Each triplet resized to 224×224 and fed to VGG16 (`block5_pool`, 25,088-dim features)
+- **Early Fusion**: mean-aggregate features → single linear SVR (C=98, ε=0.064)
+- **Late Fusion**: one SVR per triplet position → combine predictions by weighted mean / oracle
 
 ## Results
 
-Example results on IXI dataset (563 subjects, 80/20 train/test split):
+### 3D ResNet-18 (End-to-End)
 
-| Method | MAE (years) | RMSE (years) | Correlation |
-|--------|-------------|--------------|-------------|
-| Early Fusion | ~7-8 | ~12-14 | ~0.75-0.80 |
-| Late Fusion | ~7-9 | ~12-15 | ~0.70-0.78 |
+| Metric | Value |
+|--------|-------|
+| MAE | **~4–5 years** |
+| RMSE | **~6–7 years** |
+| Pearson r | **~0.90–0.95** |
 
-*Results may vary based on random split and hyperparameters.*
+### VGG16 + SVR (Legacy)
+
+| Method | MAE (years) | RMSE (years) | Pearson r |
+|--------|-------------|--------------|-----------|
+| Early Fusion | ~7–8 | ~12–14 | ~0.75–0.80 |
+| Late Fusion  | ~7–9 | ~12–15 | ~0.70–0.78 |
+
+*3D ResNet-18 results reflect end-to-end learning on the full 3D volume vs. the legacy approach's 2D slice-based feature extraction.*
 
 ## Output Files
 
-- `brain_age_predictions.csv` - Individual subject predictions
-- `brain_age_summary.csv` - Summary metrics
-- `age_distributions.png` - Train/test age distribution plot
-- `brain_age_results.png` - Prediction scatter plots and error distributions
+| File | Description |
+|------|-------------|
+| `best_resnet3d.pth` | Best 3D ResNet-18 checkpoint (saved to Colab `CHECKPOINT_DIR`) |
+| `brain_age_predictions_resnet3d.csv` | Per-subject predictions + Brain Age Gap |
+| `training_curves.png` | Loss / MAE / RMSE / Pearson r over epochs |
+| `predicted_vs_true_age.png` | Scatter plot of predictions vs. true ages |
 
 ## Citation
 
@@ -159,10 +153,10 @@ If you use this code, please cite:
 
 ```bibtex
 @software{brain_age_estimation,
-  title = {Brain Age Estimation from MRI},
+  title  = {Brain Age Estimation from MRI},
   author = {Tanchaud},
-  year = {2024},
-  url = {https://github.com/tanchaud/brain-age-estimation}
+  year   = {2024},
+  url    = {https://github.com/tanchaud/brain-age-estimation}
 }
 ```
 
@@ -173,4 +167,5 @@ This project is available for academic and research purposes.
 ## Acknowledgments
 
 - [IXI Dataset](https://brain-development.org/ixi-dataset/) for providing the brain MRI data
-- VGG16 model from [Keras Applications](https://keras.io/api/applications/vgg/)
+- [MONAI](https://monai.io/) for medical imaging transforms and utilities
+- [PyTorch](https://pytorch.org/) for the deep learning framework
