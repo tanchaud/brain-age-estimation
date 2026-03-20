@@ -394,10 +394,17 @@ def show_upload_page():
 def show_demo_page():
     """Display demo results page."""
     st.markdown("## Demo Results")
-    st.markdown("This page shows sample results from the brain age prediction model.")
 
-    # Generate sample data
-    df = create_sample_prediction()
+    csv_path = os.path.join(os.path.dirname(__file__), "brain_age_predictions.csv")
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        # Normalise column names
+        if 'Error' in df.columns and 'Brain_Age_Gap' not in df.columns:
+            df['Brain_Age_Gap'] = df['Error']
+        st.markdown("Results loaded from the trained model.")
+    else:
+        st.warning("No real predictions found — showing synthetic demo data.")
+        df = create_sample_prediction()
 
     # Metrics
     mae = np.mean(np.abs(df['Brain_Age_Gap']))
