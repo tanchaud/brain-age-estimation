@@ -210,14 +210,16 @@ def main():
 
     # Sidebar
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "Upload MRI", "Demo Results", "About"])
+    page = st.sidebar.radio("Go to", ["Home", "Upload MRI", "VGG16 + SVR Results", "3D ResNet Results", "About"])
 
     if page == "Home":
         show_home_page()
     elif page == "Upload MRI":
         show_upload_page()
-    elif page == "Demo Results":
+    elif page == "VGG16 + SVR Results":
         show_demo_page()
+    elif page == "3D ResNet Results":
+        show_resnet_page()
     elif page == "About":
         show_about_page()
 
@@ -392,60 +394,162 @@ def show_upload_page():
 
 
 def show_demo_page():
-    """Display demo results page."""
-    st.markdown("## Demo Results")
+    """Display VGG16 + SVR pipeline results."""
+    st.markdown("## VGG16 + SVR Pipeline Results")
 
-    csv_path = os.path.join(os.path.dirname(__file__), "brain_age_predictions.csv")
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
-        # Normalise column names
-        if 'Error' in df.columns and 'Brain_Age_Gap' not in df.columns:
-            df['Brain_Age_Gap'] = df['Error']
-        st.markdown("Results loaded from the trained model.")
+    base_dir = os.path.dirname(__file__)
+    pred_path = os.path.join(base_dir, "Results_VGG16SVR", "brain_age_vgg16_svr_predictions.csv")
+    summary_path = os.path.join(base_dir, "Results_VGG16SVR", "brain_age_vgg16_svr_summary.csv")
+    plot_path = os.path.join(base_dir, "Results_VGG16SVR", "brain_age_vgg16_svr_results.png")
+
+    if not os.path.exists(pred_path):
+        st.warning("Results not found. Please run `Brain_Age_Colab.ipynb` and place results in `Results_VGG16SVR/`.")
+        return
+
+    df = pd.read_csv(pred_path)
+    summary_df = pd.read_csv(summary_path) if os.path.exists(summary_path) else None
+
+    st.info(f"Results from **VGG16 + SVR** pipeline — validation set ({len(df)} subjects)")
+
+    # ── Summary metrics ──────────────────────────────────────────────────────
+    st.markdown("### Performance Summary")
+
+    if summary_df is not None:
+        summary_indexed = summary_df.set_index('Metric')
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Early Fusion")
+            st.metric("MAE", f"{float(summary_indexed.loc['MAE', 'Early_Fusion']):.2f} years")
+            st.metric("RMSE", f"{float(summary_indexed.loc['RMSE', 'Early_Fusion']):.2f} years")
+            st.metric("Correlation", f"{float(summary_indexed.loc['Correlation', 'Early_Fusion']):.3f}")
+
+        with col2:
+            st.markdown("#### Late Fusion")
+            st.metric("MAE", f"{float(summary_indexed.loc['MAE', 'Late_Fusion']):.2f} years")
+            st.metric("RMSE", f"{float(summary_indexed.loc['RMSE', 'Late_Fusion']):.2f} years")
+            st.metric("Correlation", f"{float(summary_indexed.loc['Correlation', 'Late_Fusion']):.3f}")
     else:
-        st.warning("No real predictions found — showing synthetic demo data.")
-        df = create_sample_prediction()
+        # Compute from predictions CSV directly
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### Early Fusion")
+            mae_e = np.mean(np.abs(df['Error_EarlyFusion']))
+            rmse_e = np.sqrt(np.mean(df['Error_EarlyFusion'] ** 2))
+            corr_e = np.corrcoef(df['True_Age'], df['Predicted_EarlyFusion'])[0, 1]
+            st.metric("MAE", f"{mae_e:.2f} years")
+            st.metric("RMSE", f"{rmse_e:.2f} years")
+            st.metric("Correlation", f"{corr_e:.3f}")
+        with col2:
+            st.markdown("#### Late Fusion")
+            mae_l = np.mean(np.abs(df['Error_LateFusion']))
+            rmse_l = np.sqrt(np.mean(df['Error_LateFusion'] ** 2))
+            corr_l = np.corrcoef(df['True_Age'], df['Predicted_LateFusion'])[0, 1]
+            st.metric("MAE", f"{mae_l:.2f} years")
+            st.metric("RMSE", f"{rmse_l:.2f} years")
+            st.metric("Correlation", f"{corr_l:.3f}")
 
-    # Metrics
-    mae = np.mean(np.abs(df['Brain_Age_Gap']))
-    rmse = np.sqrt(np.mean(df['Brain_Age_Gap']**2))
+    # ── Plots ─────────────────────────────────────────────────────────────────
+    st.markdown("### Visualizations")
+    if os.path.exists(plot_path):
+        from PIL import Image
+        img = Image.open(plot_path)
+        st.image(img, caption="VGG16 + SVR — Early & Late Fusion results", use_container_width=True)
+    else:
+        st.warning("Plot image not found (`Results/brain_age_vgg16_svr_results.png`).")
+
+    # ── Per-subject table ─────────────────────────────────────────────────────
+    st.markdown("### Per-Subject Predictions")
+    display_df = df.copy()
+    st.dataframe(
+        display_df.style.format({
+            'True_Age': '{:.1f}',
+            'Predicted_EarlyFusion': '{:.1f}',
+            'Error_EarlyFusion': '{:+.1f}',
+            'Predicted_LateFusion': '{:.1f}',
+            'Error_LateFusion': '{:+.1f}',
+        }).background_gradient(subset=['Error_EarlyFusion', 'Error_LateFusion'], cmap='RdYlBu_r'),
+        use_container_width=True
+    )
+
+    # ── Download buttons ──────────────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="📥 Download Predictions (CSV)",
+            data=df.to_csv(index=False),
+            file_name="brain_age_vgg16_svr_predictions.csv",
+            mime="text/csv"
+        )
+    with col2:
+        if summary_df is not None:
+            st.download_button(
+                label="📥 Download Summary (CSV)",
+                data=summary_df.to_csv(index=False),
+                file_name="brain_age_vgg16_svr_summary.csv",
+                mime="text/csv"
+            )
+
+
+def show_resnet_page():
+    """Display 3D ResNet-18 pipeline results."""
+    st.markdown("## 3D ResNet-18 Pipeline Results")
+
+    base_dir   = os.path.dirname(__file__)
+    pred_path  = os.path.join(base_dir, "Results_3DResNet", "brain_age_resnet3d_predictions.csv")
+    scatter_path  = os.path.join(base_dir, "Results_3DResNet", "brain_age_resnet3d_results.png")
+    curves_path   = os.path.join(base_dir, "Results_3DResNet", "brain_age_resnet3d_training_curves.png")
+
+    if not os.path.exists(pred_path):
+        st.warning("Results not found. Please run `BrainAge_3DResNet_Colab.ipynb` and place results in `Results_3DResNet/`.")
+        return
+
+    df = pd.read_csv(pred_path)
+    st.info(f"Results from **3D ResNet-18** pipeline — validation set ({len(df)} subjects)")
+
+    # ── Summary metrics ───────────────────────────────────────────────────
+    st.markdown("### Performance Summary")
+    mae  = np.mean(np.abs(df['Brain_Age_Gap']))
+    rmse = np.sqrt(np.mean(df['Brain_Age_Gap'] ** 2))
     corr = np.corrcoef(df['True_Age'], df['Predicted_Age'])[0, 1]
 
-    st.markdown("### Model Performance")
     col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Subjects", len(df))
+    col2.metric("MAE", f"{mae:.2f} years")
+    col3.metric("RMSE", f"{rmse:.2f} years")
+    col4.metric("Correlation", f"{corr:.3f}")
 
-    with col1:
-        st.metric("Subjects", len(df))
-    with col2:
-        st.metric("MAE", f"{mae:.2f} years")
-    with col3:
-        st.metric("RMSE", f"{rmse:.2f} years")
-    with col4:
-        st.metric("Correlation", f"{corr:.3f}")
+    # ── Plots ─────────────────────────────────────────────────────────────
+    st.markdown("### Predicted vs True Age")
+    if os.path.exists(scatter_path):
+        from PIL import Image
+        st.image(Image.open(scatter_path), caption="3D ResNet-18 — Predicted vs True Age", use_container_width=True)
+    else:
+        st.warning("Scatter plot not found (`Results_3DResNet/brain_age_resnet3d_results.png`).")
 
-    # Visualization
-    st.markdown("### Visualization")
-    fig = plot_predictions(df)
-    st.pyplot(fig)
-    plt.close()
+    st.markdown("### Training Curves")
+    if os.path.exists(curves_path):
+        from PIL import Image
+        st.image(Image.open(curves_path), caption="3D ResNet-18 — Training Curves", use_container_width=True)
+    else:
+        st.warning("Training curves not found (`Results_3DResNet/brain_age_resnet3d_training_curves.png`).")
 
-    # Data table
-    st.markdown("### Sample Predictions")
+    # ── Per-subject table ─────────────────────────────────────────────────
+    st.markdown("### Per-Subject Predictions")
     st.dataframe(
         df.style.format({
-            'True_Age': '{:.1f}',
+            'True_Age':      '{:.1f}',
             'Predicted_Age': '{:.1f}',
-            'Brain_Age_Gap': '{:+.1f}'
+            'Brain_Age_Gap': '{:+.1f}',
         }).background_gradient(subset=['Brain_Age_Gap'], cmap='RdYlBu_r'),
         use_container_width=True
     )
 
-    # Download button
-    csv = df.to_csv(index=False)
+    # ── Download button ───────────────────────────────────────────────────
     st.download_button(
-        label="📥 Download Results (CSV)",
-        data=csv,
-        file_name="brain_age_predictions.csv",
+        label="📥 Download Predictions (CSV)",
+        data=df.to_csv(index=False),
+        file_name="brain_age_resnet3d_predictions.csv",
         mime="text/csv"
     )
 

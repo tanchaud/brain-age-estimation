@@ -357,34 +357,35 @@ def show_upload(checkpoint_path: str):
 
 
 def show_demo():
-    st.markdown("## Demo Results")
+    st.markdown("## Validation Set Results")
 
-    csv_path = os.path.join(os.path.dirname(__file__), "brain_age_predictions.csv")
+    csv_path = os.path.join(os.path.dirname(__file__), "brain_age_predictions_resnet3d.csv")
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
         if 'Error' in df.columns and 'Brain_Age_Gap' not in df.columns:
             df['Brain_Age_Gap'] = df['Error']
-        st.markdown("Results loaded from the trained model.")
+        st.info(f"Results shown are from the **validation set** ({len(df)} subjects). The test set is held out and not evaluated.")
     else:
         st.warning("No real predictions found — showing synthetic demo data.")
         df = make_demo_data()
+        st.info("Showing synthetic demo data. Run the Colab notebook to generate real validation set results.")
 
     mae  = np.mean(np.abs(df["Brain_Age_Gap"]))
     rmse = np.sqrt(np.mean(df["Brain_Age_Gap"] ** 2))
     corr = np.corrcoef(df["True_Age"], df["Predicted_Age"])[0, 1]
 
-    st.markdown("### Model Performance")
+    st.markdown("### Validation Set Performance")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Subjects",    len(df))
-    c2.metric("MAE",         f"{mae:.2f} yr")
-    c3.metric("RMSE",        f"{rmse:.2f} yr")
-    c4.metric("Pearson r",   f"{corr:.3f}")
+    c1.metric("Validation Subjects", len(df))
+    c2.metric("MAE",                 f"{mae:.2f} yr")
+    c3.metric("RMSE",                f"{rmse:.2f} yr")
+    c4.metric("Pearson r",           f"{corr:.3f}")
 
     st.markdown("### Visualisation")
     st.pyplot(plot_predictions(df))
     plt.close("all")
 
-    st.markdown("### Per-Subject Predictions")
+    st.markdown("### Per-Subject Predictions (Validation Set)")
     st.dataframe(
         df.style
           .format({"True_Age": "{:.1f}", "Predicted_Age": "{:.1f}", "Brain_Age_Gap": "{:+.1f}"})
@@ -395,7 +396,7 @@ def show_demo():
     st.download_button(
         "📥 Download Results (CSV)",
         data=df.to_csv(index=False),
-        file_name="demo_brain_age_resnet3d.csv",
+        file_name="validation_brain_age_resnet3d.csv",
         mime="text/csv",
     )
 
@@ -461,7 +462,7 @@ def main():
 
     # Sidebar
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "Upload MRI", "Demo Results", "About"])
+    page = st.sidebar.radio("Go to", ["Home", "Upload MRI", "Validation Results", "About"])
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Model Checkpoint")
@@ -475,7 +476,7 @@ def main():
         show_home()
     elif page == "Upload MRI":
         show_upload(checkpoint_path)
-    elif page == "Demo Results":
+    elif page == "Validation Results":
         show_demo()
     elif page == "About":
         show_about()
