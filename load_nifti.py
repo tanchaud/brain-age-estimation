@@ -2,19 +2,17 @@ import os
 import nibabel as nib
 import numpy as np
 
-def load_nifti_slices(nii_dir, nii_list, n, num_slices=120):
+def load_nifti_slices(nii_dir, nii_list, n):
     """
-    Loads NIFTI images and extracts a specific range of slices.
+    Loads NIFTI images and returns all axial slices from each volume.
 
     Args:
         nii_dir (str): Directory containing NIFTI files.
         nii_list (list): List of NIFTI file names (or file objects).
         n (int): Number of images to load.
-        num_slices (int, optional): Number of slices to extract from the
-                                    beginning of the 3rd dimension. Defaults to 120.
 
     Returns:
-        list: A list of 3D NumPy arrays, where each array is an MRI image volume.
+        list: A list of 3D NumPy arrays, where each array is a full MRI image volume.
     """
     images = []
     for i in range(n):
@@ -30,16 +28,10 @@ def load_nifti_slices(nii_dir, nii_list, n, num_slices=120):
             nii_img = nib.load(file_path)
             mri_image_data = nii_img.get_fdata()
 
-            # Ensure it's at least 3D before slicing
-            if mri_image_data.ndim >= 3:
-                mri_image_sliced = mri_image_data[:, :, :num_slices]
-            else:
-                # Handle cases with fewer than 3 dimensions if necessary,
-                # or raise an error/warning
-                print(f"Warning: Image {file_name} has fewer than 3 dimensions. Skipping slicing.")
-                mri_image_sliced = mri_image_data
+            if mri_image_data.ndim < 3:
+                print(f"Warning: Image {file_name} has fewer than 3 dimensions.")
 
-            images.append(mri_image_sliced)
+            images.append(mri_image_data)
         except Exception as e:
             print(f"Error loading or processing {file_path}: {e}")
 
