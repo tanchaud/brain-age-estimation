@@ -14,7 +14,10 @@ This project implements brain age prediction from T1-weighted MRI scans. It supp
 - End-to-end 3D ResNet-18 trained on full MRI volumes
 - MONAI-based preprocessing pipeline (reorientation, resampling, normalisation)
 - Dataset cleaning step to automatically detect and skip corrupt/blank scans
-- Mixed-precision training (AMP) for fast Colab GPU execution
+- Mixed-precision training (AMP) for fast Colab/Kaggle GPU execution
+- Huber loss (δ=1.0) for robust regression against age outliers
+- AdamW optimiser with cosine LR annealing and gradient clipping
+- Post-hoc bias correction via linear regression on validation predictions
 - Two interactive Streamlit web demos (3D ResNet and VGG16+SVR)
 - Comprehensive evaluation metrics (MAE, RMSE, Pearson correlation)
 - Memory-efficient design supporting 500+ subjects
@@ -109,7 +112,8 @@ streamlit run app.py
 |------|--------|
 | Preprocessing | RAS reorientation → 2 mm isotropic resampling → pad/crop to 96³ → z-score normalisation |
 | Architecture | 3D ResNet-18: stem (7³ conv) + 4 residual stages (64→128→256→512 ch) + AdaptiveAvgPool → FC(1) |
-| Training | L1 loss, Adam (lr=1e-4), cosine LR annealing, dropout=0.3, AMP, batch size 2 |
+| Training | Huber loss (δ=1.0), AdamW (lr=1e-4, wd=1e-4), cosine LR annealing (1e-4→1e-6), gradient clipping (max_norm=1.0), dropout=0.3, AMP |
+| Bias correction | Post-hoc LinearRegression fit on val predictions to remove systematic age bias; corrected and uncorrected MAE both reported |
 | Dataset cleaning | Corrupt files, <3D volumes, dimensions <32 voxels, NaN/Inf, blank scans are dropped automatically |
 
 ### VGG16 + SVR (Legacy)
