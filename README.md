@@ -130,12 +130,12 @@ streamlit run app.py
 
 ### 3D ResNet-18 (End-to-End)
 
-| Run | Epochs | LR | Warmup | Test MAE (uncorr.) | Test MAE (corr.) | Pearson r |
-|-----|--------|----|--------|--------------------|------------------|-----------|
+| Run | Epochs | LR | Warmup | Val MAE (uncorr.) | Val MAE (corr.) | Pearson r |
+|-----|--------|----|--------|-------------------|-----------------|-----------|
 | Previous (60 ep, lr=1e-4) | 60 | 1e-4 | No | ~4–5 yr | — | ~0.90–0.95 |
 | Current (100 ep, lr=1e-5) | 100 | 1e-5 | 5 ep | *pending* | *pending* | *pending* |
 
-*Corrected MAE uses a post-hoc linear bias correction fitted on the validation set and applied to the held-out test set.*
+*Both runs are evaluated on the validation set (15% of subjects). The updated notebook also evaluates on a held-out test set (15%), but those results are not yet available.*
 
 ### VGG16 + SVR (Legacy)
 
