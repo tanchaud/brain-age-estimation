@@ -132,7 +132,7 @@ streamlit run app.py
 
 | Run | Epochs | LR | Warmup | Val MAE (uncorr.) | Val MAE (corr.) | Pearson r |
 |-----|--------|----|--------|-------------------|-----------------|-----------|
-| Previous (60 ep, lr=1e-4) | 60 | 1e-4 | No | ~4–5 yr | — | ~0.90–0.95 |
+| Previous (60 ep, lr=1e-4) | 60 | 1e-4 | No | 9.13 yr | — | 0.734 |
 | Current (100 ep, lr=1e-5) | 100 | 1e-5 | 5 ep | *pending* | *pending* | *pending* |
 
 *Both runs are evaluated on the validation set (15% of subjects). The updated notebook also evaluates on a held-out test set (15%), but those results are not yet available.*
