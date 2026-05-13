@@ -16,8 +16,8 @@ This project implements brain age prediction from T1-weighted MRI scans. It supp
 - Dataset cleaning step to automatically detect and skip corrupt/blank scans
 - Mixed-precision training (AMP) for fast Colab/Kaggle GPU execution
 - Huber loss (δ=1.0) for robust regression against age outliers
-- AdamW optimiser with cosine LR annealing and gradient clipping
-- Post-hoc bias correction via linear regression on validation predictions
+- AdamW optimiser with 5-epoch linear warmup + cosine LR annealing and gradient clipping
+- Post-hoc bias correction via linear regression — fitted on val, applied to held-out test set
 - Two interactive Streamlit web demos (3D ResNet and VGG16+SVR)
 - Comprehensive evaluation metrics (MAE, RMSE, Pearson correlation)
 - Memory-efficient design supporting 500+ subjects
@@ -28,14 +28,16 @@ This project implements brain age prediction from T1-weighted MRI scans. It supp
 .
 ├── app_resnet3d.py              # Streamlit demo — 3D ResNet-18 (current)
 ├── app.py                       # Streamlit demo — VGG16 + SVR (legacy)
-├── BrainAge_3DResNet_Colab.ipynb  # Colab notebook — end-to-end 3D ResNet training
-├── brain_age_project_main.py    # Legacy workflow script (VGG16 + SVR)
-├── feature_extraction.py        # VGG16 triplet feature extraction
-├── early_fusion.py              # Early fusion SVR
-├── late_fusion.py               # Late fusion with weak learners
-├── concat_predictions.py        # Prediction combination strategies
-├── data_split.py                # Train/test splitting (age-sorted, 75/25)
-├── load_nifti.py                # NIfTI file loading
+├── BrainAge_3DResNet_Colab.ipynb      # Colab notebook — end-to-end 3D ResNet training
+├── brain-age-estimation_kaggle.ipynb  # Kaggle notebook — same pipeline, 128³ input
+├── brain_age_project_main.py          # Legacy workflow script (VGG16 + SVR)
+├── feature_extraction.py              # VGG16 triplet feature extraction
+├── early_fusion.py                    # Early fusion SVR
+├── late_fusion.py                     # Late fusion with weak learners
+├── concat_predictions.py              # Prediction combination strategies
+├── data_split_ixi.py                  # Train/val/test splitting (age-sorted, 70/15/15)
+├── data_split.py                      # Legacy train/test splitting (75/25)
+├── load_nifti.py                      # NIfTI file loading
 ├── mae.py                       # Mean Absolute Error metric
 ├── rmse.py                      # Root Mean Squared Error metric
 ├── pearson_corr.py              # Pearson correlation metric
@@ -112,8 +114,9 @@ streamlit run app.py
 |------|--------|
 | Preprocessing | RAS reorientation → 2 mm isotropic resampling → pad/crop to 96³ → z-score normalisation |
 | Architecture | 3D ResNet-18: stem (7³ conv) + 4 residual stages (64→128→256→512 ch) + AdaptiveAvgPool → FC(1) |
-| Training | Huber loss (δ=1.0), AdamW (lr=1e-4, wd=1e-4), cosine LR annealing (1e-4→1e-6), gradient clipping (max_norm=1.0), dropout=0.3, AMP |
-| Bias correction | Post-hoc LinearRegression fit on val predictions to remove systematic age bias; corrected and uncorrected MAE both reported |
+| Training | Huber loss (δ=1.0), AdamW (lr=1e-5, wd=1e-4), 5-epoch linear warmup then cosine annealing (→1e-6), gradient clipping (max_norm=1.0), dropout=0.3, AMP, 100 epochs |
+| Data split | 70 / 15 / 15 % train / val / test — age-sorted cyclic assignment so all splits span the full age range |
+| Bias correction | LinearRegression fitted on val predictions, applied to held-out test predictions; slope > 1 expected to counteract regression-to-the-mean |
 | Dataset cleaning | Corrupt files, <3D volumes, dimensions <32 voxels, NaN/Inf, blank scans are dropped automatically |
 
 ### VGG16 + SVR (Legacy)
@@ -127,11 +130,12 @@ streamlit run app.py
 
 ### 3D ResNet-18 (End-to-End)
 
-| Metric | Value |
-|--------|-------|
-| MAE | **~4–5 years** |
-| RMSE | **~6–7 years** |
-| Pearson r | **~0.90–0.95** |
+| Run | Epochs | LR | Warmup | Test MAE (uncorr.) | Test MAE (corr.) | Pearson r |
+|-----|--------|----|--------|--------------------|------------------|-----------|
+| Previous (60 ep, lr=1e-4) | 60 | 1e-4 | No | ~4–5 yr | — | ~0.90–0.95 |
+| Current (100 ep, lr=1e-5) | 100 | 1e-5 | 5 ep | *pending* | *pending* | *pending* |
+
+*Corrected MAE uses a post-hoc linear bias correction fitted on the validation set and applied to the held-out test set.*
 
 ### VGG16 + SVR (Legacy)
 
